@@ -1,173 +1,144 @@
 import sqlite3
 from datetime import datetime
 
-class AttendanceSystem:
-    def __init__(self, db_name="university_system.db"):
-        # الاتصال بقاعدة البيانات (سيتم إنشاء الملف تلقائياً إذا لم يكن موجوداً)
-        self.conn = sqlite3.connect(db_name)
-        self.cursor = self.conn.cursor()
-        self.create_tables()
+class UniAttendance:
+    def __init__(self):
+        self.db_name = "attendance.db"
+        self.conn = sqlite3.connect(self.db_name)
+        self.c = self.conn.cursor()
+        self.init_db()
 
-    def create_tables(self):
-        """إنشاء الجداول اللازمة بنظام العلاقات (Relational Schema)"""
-        
-        # 1. جدول الطلاب
-        self.cursor.execute('''
+    def init_db(self):
+        # Create tables
+        self.c.execute('''
             CREATE TABLE IF NOT EXISTS students (
-                student_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                created_at TEXT
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                reg_date TEXT
             )
         ''')
-
-        # 2. جدول المحاضرات (يخزن الموضوع والتاريخ)
-        self.cursor.execute('''
+        
+        self.c.execute('''
             CREATE TABLE IF NOT EXISTS lectures (
-                lecture_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                topic TEXT,
-                timestamp TEXT
-            )
-        ''')
-
-        # 3. جدول الحضور (يربط الطالب بالمحاضرة مع وقت التسجيل)
-        # هذا الجدول يمثل علاقة Many-to-Many
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS attendance (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                student_id TEXT,
-                lecture_id INTEGER,
-                marked_at TEXT,
-                FOREIGN KEY(student_id) REFERENCES students(student_id),
-                FOREIGN KEY(lecture_id) REFERENCES lectures(lecture_id),
-                UNIQUE(student_id, lecture_id) -- منع تكرار الحضور لنفس المحاضرة
+                subject TEXT,
+                date_time TEXT
+            )
+        ''')
+
+        self.c.execute('''
+            CREATE TABLE IF NOT EXISTS records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                std_id TEXT,
+                lec_id INTEGER,
+                time_in TEXT,
+                FOREIGN KEY(std_id) REFERENCES students(id),
+                FOREIGN KEY(lec_id) REFERENCES lectures(id)
             )
         ''')
         self.conn.commit()
 
-    def add_student(self, student_id, name):
+    def add_student(self, sid, name):
         try:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.cursor.execute("INSERT INTO students (student_id, name, created_at) VALUES (?, ?, ?)", 
-                                (student_id, name, timestamp))
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.c.execute("INSERT INTO students VALUES (?, ?, ?)", (sid, name, now))
             self.conn.commit()
-            print(f"✅ Success: Student {name} added to Database.")
-        except sqlite3.IntegrityError:
-            print(f"❌ Error: Student ID {student_id} already exists!")
+            print("Student added.")
+        except:
+            print("Error: Student ID might already exist.")
 
-    def start_new_lecture(self, topic="General Lecture"):
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.cursor.execute("INSERT INTO lectures (topic, timestamp) VALUES (?, ?)", (topic, timestamp))
+    def new_lecture(self, sub):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.c.execute("INSERT INTO lectures (subject, date_time) VALUES (?, ?)", (sub, now))
         self.conn.commit()
-        
-        # الحصول على ID المحاضرة التي تم إنشاؤها للتو
-        lecture_id = self.cursor.lastrowid
-        print(f"\n📘 New Lecture Started (ID: {lecture_id}) - Topic: {topic}")
-        return lecture_id
+        print(f"Lecture '{sub}' started.")
 
-    def get_current_lecture_id(self):
-        """جلب آخر محاضرة تم إنشاؤها"""
-        self.cursor.execute("SELECT lecture_id FROM lectures ORDER BY lecture_id DESC LIMIT 1")
-        result = self.cursor.fetchone()
-        return result[0] if result else None
-
-    def record_attendance(self, student_id):
-        lecture_id = self.get_current_lecture_id()
+    def mark_present(self, sid):
+        # Get last lecture ID
+        self.c.execute("SELECT id FROM lectures ORDER BY id DESC LIMIT 1")
+        last_lec = self.c.fetchone()
         
-        if not lecture_id:
-            print("❌ Error: No lectures started yet.")
+        if not last_lec:
+            print("No active lecture found.")
             return
 
-        # التحقق من وجود الطالب أولاً
-        self.cursor.execute("SELECT name FROM students WHERE student_id = ?", (student_id,))
-        student = self.cursor.fetchone()
+        lec_id = last_lec[0]
+        now = datetime.now().strftime("%H:%M:%S")
         
-        if not student:
-            print("❌ Error: Student ID not found in database.")
+        # Check if student exists
+        self.c.execute("SELECT name FROM students WHERE id=?", (sid,))
+        res = self.c.fetchone()
+        
+        if res:
+            try:
+                # Prevent duplicate attendance for same lecture
+                self.c.execute("SELECT * FROM records WHERE std_id=? AND lec_id=?", (sid, lec_id))
+                if self.c.fetchone():
+                    print("Already registered.")
+                else:
+                    self.c.execute("INSERT INTO records (std_id, lec_id, time_in) VALUES (?, ?, ?)", 
+                                 (sid, lec_id, now))
+                    self.conn.commit()
+                    print(f"Marked: {res[0]}")
+            except Exception as e:
+                print(e)
+        else:
+            print("Student not found.")
+
+    def show_stats(self):
+        print("\n--- Attendance Report ---")
+        
+        self.c.execute("SELECT COUNT(*) FROM lectures")
+        total_lecs = self.c.fetchone()[0]
+        
+        if total_lecs == 0:
+            print("No lectures yet.")
             return
 
-        try:
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.cursor.execute("INSERT INTO attendance (student_id, lecture_id, marked_at) VALUES (?, ?, ?)", 
-                                (student_id, lecture_id, current_time))
-            self.conn.commit()
-            print(f"✅ Attendance marked for {student[0]} at {current_time}")
-        
-        except sqlite3.IntegrityError:
-            print(f"⚠️ Warning: {student[0]} is already marked present for this lecture.")
-
-    def generate_report(self):
-        print("\n" + "="*40)
-        print("📊 PROFESSIONAL ATTENDANCE ANALYTICS")
-        print("="*40)
-
-        # 1. حساب إجمالي المحاضرات
-        self.cursor.execute("SELECT COUNT(*) FROM lectures")
-        total_lectures = self.cursor.fetchone()[0]
-
-        if total_lectures == 0:
-            print("No lectures recorded yet.")
-            return
-
-        print(f"Total Lectures Conducted: {total_lectures}\n")
-        print(f"{'Name':<20} | {'Attended':<10} | {'Rate':<10} | {'Status'}")
-        print("-" * 60)
-
-        # 2. استعلام معقد (Aggregation) لجمع البيانات
-        # هذا الاستعلام يجلب كل الطلاب ويحسب عدد مرات حضورهم
+        # Get all students and their count
         query = '''
-            SELECT s.name, COUNT(a.lecture_id) as attendance_count
-            FROM students s
-            LEFT JOIN attendance a ON s.student_id = a.student_id
-            GROUP BY s.student_id
+            SELECT s.name, COUNT(r.lec_id) 
+            FROM students s 
+            LEFT JOIN records r ON s.id = r.std_id 
+            GROUP BY s.id
         '''
+        self.c.execute(query)
+        data = self.c.fetchall()
         
-        self.cursor.execute(query)
-        records = self.cursor.fetchall()
-
-        for name, count in records:
-            percentage = (count / total_lectures) * 100
-            status = "✅ Good" if percentage >= 75 else "⚠️ Low Attendance"
-            if percentage < 50: status = "🚨 CRITICAL"
-            
-            print(f"{name:<20} | {count}/{total_lectures:<8} | {percentage:.1f}%     | {status}")
-        
-        print("-" * 60 + "\n")
+        for name, count in data:
+            perc = (count / total_lecs) * 100
+            print(f"{name}: {count}/{total_lecs} ({int(perc)}%)")
 
     def close(self):
         self.conn.close()
 
-# =========================
-# Main Execution
-# =========================
+# Main loop
 if __name__ == "__main__":
-    system = AttendanceSystem()
-
+    sys = UniAttendance()
+    
     while True:
-        print("\n1. Add Student")
-        print("2. Start New Lecture")
-        print("3. Mark Attendance")
-        print("4. Analytics Report")
+        print("\n1. New Student")
+        print("2. Start Lecture")
+        print("3. Take Attendance")
+        print("4. Stats")
         print("5. Exit")
         
-        choice = input("Select Option: ")
-
-        if choice == '1':
-            uid = input("Enter ID: ")
-            name = input("Enter Name: ")
-            system.add_student(uid, name)
+        ch = input(">> ")
         
-        elif choice == '2':
-            topic = input("Enter Lecture Topic (e.g., Physics, Calculus): ")
-            system.start_new_lecture(topic)
-
-        elif choice == '3':
-            uid = input("Scan Student ID: ")
-            system.record_attendance(uid)
-
-        elif choice == '4':
-            system.generate_report()
-
-        elif choice == '5':
-            system.close()
-            print("System Shutdown.")
+        if ch == '1':
+            i = input("ID: ")
+            n = input("Name: ")
+            sys.add_student(i, n)
+        elif ch == '2':
+            s = input("Subject: ")
+            sys.new_lecture(s)
+        elif ch == '3':
+            i = input("Student ID: ")
+            sys.mark_present(i)
+        elif ch == '4':
+            sys.show_stats()
+        elif ch == '5':
+            sys.close()
             break
+        ##test
+        
